@@ -11,3 +11,9 @@ __pycache__/
 *.py[cod]
 .venv/
 venv/
+
+# Ralph loop runtime/state (local only)
+.ralph/
+
+# Logs (keep logs/daily-context.md tracked)
+logs/*.log
