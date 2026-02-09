@@ -8,9 +8,11 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Optional, List
 from enum import Enum
+import sqlite3
 
 from db.connection import get_connection
 from market.prices import get_price
+from market.live_prices import get_live_market_price
 
 
 class AlertCondition(Enum):
@@ -44,10 +46,22 @@ def init_alerts_table() -> None:
                 threshold REAL NOT NULL,
                 created_at TEXT DEFAULT CURRENT_TIMESTAMP,
                 last_triggered TEXT,
+                last_seen_price REAL,
+                last_checked TEXT,
                 is_active INTEGER DEFAULT 1,
                 FOREIGN KEY (card_id) REFERENCES cards(id)
             )
         """)
+        # Lightweight migrations for existing DBs.
+        for stmt in (
+            "ALTER TABLE price_alerts ADD COLUMN last_seen_price REAL",
+            "ALTER TABLE price_alerts ADD COLUMN last_checked TEXT",
+        ):
+            try:
+                conn.execute(stmt)
+            except sqlite3.OperationalError as e:
+                if "duplicate column" not in str(e).lower():
+                    raise
         conn.execute("""
             CREATE INDEX IF NOT EXISTS idx_alerts_user ON price_alerts(user_id)
         """)
@@ -149,14 +163,28 @@ def toggle_alert(alert_id: int, user_id: str, is_active: bool) -> bool:
         conn.close()
 
 
-def check_alerts(user_id: Optional[str] = None) -> List[dict]:
+def check_alerts(user_id: Optional[str] = None, use_live: bool = False) -> List[dict]:
     """
     Check all active alerts and return triggered ones.
     If user_id provided, only check that user's alerts.
     """
+    # Backwards-compatible wrapper.
+    return check_alerts_with_options(user_id=user_id, use_live=use_live)
+
+
+def check_alerts_with_options(user_id: Optional[str] = None, use_live: bool = False) -> List[dict]:
+    """
+    Check all active alerts and return triggered ones.
+
+    Trigger semantics:
+    - First observation (last_seen_price is NULL): triggers if current condition is met.
+    - Subsequent checks: triggers only on threshold crossing (prevents spam).
+    - change_percent: triggers when abs(percent change vs last_seen_price) >= threshold.
+    """
+    init_alerts_table()
     conn = get_connection()
     try:
-        query = """SELECT id, user_id, card_id, condition, threshold, last_triggered
+        query = """SELECT id, user_id, card_id, condition, threshold, last_triggered, last_seen_price
                    FROM price_alerts WHERE is_active = 1"""
         params = ()
         if user_id:
@@ -168,8 +196,12 @@ def check_alerts(user_id: Optional[str] = None) -> List[dict]:
         
         triggered = []
         for row in rows:
-            alert_id, uid, card_id, condition, threshold, last_triggered = row
-            current_price = get_price(card_id)
+            alert_id, uid, card_id, condition, threshold, last_triggered, last_seen_price = row
+
+            current_price = (
+                (get_live_market_price(card_id) if use_live else None)
+                or get_price(card_id)
+            )
             
             if current_price is None:
                 continue
@@ -178,13 +210,31 @@ def check_alerts(user_id: Optional[str] = None) -> List[dict]:
             message = ""
             
             if condition == "above":
-                if current_price > threshold:
+                if last_seen_price is None:
+                    should_trigger = current_price > threshold
+                else:
+                    should_trigger = (last_seen_price <= threshold) and (current_price > threshold)
+                if should_trigger:
                     should_trigger = True
                     message = f"📈 {card_id} is now ${current_price:.2f} (above ${threshold:.2f})"
             elif condition == "below":
-                if current_price < threshold:
+                if last_seen_price is None:
+                    should_trigger = current_price < threshold
+                else:
+                    should_trigger = (last_seen_price >= threshold) and (current_price < threshold)
+                if should_trigger:
                     should_trigger = True
                     message = f"📉 {card_id} is now ${current_price:.2f} (below ${threshold:.2f})"
+            elif condition == "change_percent":
+                if last_seen_price is not None and float(last_seen_price) != 0:
+                    pct = ((current_price - float(last_seen_price)) / float(last_seen_price)) * 100.0
+                    if abs(pct) >= threshold:
+                        should_trigger = True
+                        direction = "📈" if pct > 0 else "📉"
+                        message = (
+                            f"{direction} {card_id} moved {pct:+.1f}% to ${current_price:.2f} "
+                            f"(threshold {threshold:.1f}%)"
+                        )
             
             if should_trigger:
                 triggered.append({
@@ -201,6 +251,12 @@ def check_alerts(user_id: Optional[str] = None) -> List[dict]:
                     "UPDATE price_alerts SET last_triggered = CURRENT_TIMESTAMP WHERE id = ?",
                     (alert_id,)
                 )
+
+            # Always update last_seen_price/last_checked so we can detect crossings.
+            conn.execute(
+                "UPDATE price_alerts SET last_seen_price = ?, last_checked = CURRENT_TIMESTAMP WHERE id = ?",
+                (float(current_price), alert_id),
+            )
         
         conn.commit()
         return triggered

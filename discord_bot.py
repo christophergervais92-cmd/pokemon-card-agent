@@ -5,6 +5,7 @@ Commands: !price <card_id>, !grade <condition_notes>, !alerts, !search, !collect
 """
 import os
 from pathlib import Path
+import asyncio
 
 # Load .env.local or .env if present
 env_path = Path(__file__).resolve().parent / ".env.local"
@@ -24,7 +25,7 @@ if not TOKEN:
     raise SystemExit(1)
 
 import discord
-from discord.ext import commands
+from discord.ext import commands, tasks
 
 from grading.estimator import estimate_grade, assess_condition
 from market.prices import get_price, get_trends
@@ -36,11 +37,48 @@ intents = discord.Intents.default()
 intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 
+# Alert monitor settings
+ALERT_CHECK_INTERVAL_SECONDS = max(30, int(os.environ.get("ALERT_CHECK_INTERVAL_SECONDS", "300")))
+ALERTS_USE_LIVE_PRICE = (os.environ.get("ALERTS_USE_LIVE_PRICE", "0").strip().lower() in ("1", "true", "yes"))
+
+
+async def _send_dm(user_id: str, message: str) -> None:
+    """Best-effort DM; ignores if user blocks DMs or cannot be fetched."""
+    try:
+        uid = int(user_id)
+    except (TypeError, ValueError):
+        return
+
+    try:
+        user = bot.get_user(uid) or await bot.fetch_user(uid)
+        if user:
+            await user.send(message)
+    except Exception as e:
+        # Avoid crashing the loop on DM failures.
+        print(f"DM failed for user {user_id}: {e}")
+
+
+@tasks.loop(seconds=ALERT_CHECK_INTERVAL_SECONDS)
+async def alert_monitor_loop() -> None:
+    """Periodic alert checks that DM users when thresholds are crossed."""
+    triggered = await asyncio.to_thread(check_alerts, None, ALERTS_USE_LIVE_PRICE)
+    for t in triggered:
+        msg = t.get("message") or ""
+        if msg:
+            await _send_dm(str(t.get("user_id") or ""), msg)
+
+
+@alert_monitor_loop.error
+async def _alert_monitor_error(exc: Exception) -> None:
+    print(f"Alert monitor loop error: {exc}")
+
 
 @bot.event
 async def on_ready() -> None:
     print(f"Logged in as {bot.user} (ID: {bot.user.id})")
     print("Commands: !price <card_id>, !grade <condition_notes>, !search <query>, !alert, !portfolio")
+    if not alert_monitor_loop.is_running():
+        alert_monitor_loop.start()
 
 
 @bot.command(name="price")
@@ -115,7 +153,7 @@ async def search_cmd(ctx: commands.Context, *, query: str) -> None:
 
 @bot.command(name="alert")
 async def alert_cmd(ctx: commands.Context, action: str = "list", *, args: str = "") -> None:
-    """Manage price alerts. Usage: !alert list | !alert add <card_id> <above|below> <price> | !alert delete <id>"""
+    """Manage price alerts. Usage: !alert list | !alert add <card_id> <above|below|change_percent> <value> | !alert delete <id>"""
     user_id = str(ctx.author.id)
     
     if action == "list":
@@ -133,7 +171,12 @@ async def alert_cmd(ctx: commands.Context, action: str = "list", *, args: str = 
     elif action == "add":
         parts = args.strip().split()
         if len(parts) < 3:
-            await ctx.send("Usage: `!alert add <card_id> above|below <price>`\nExample: `!alert add sv8-161 above 900`")
+            await ctx.send(
+                "Usage: `!alert add <card_id> above|below <price>`\n"
+                "Example: `!alert add sv8-161 above 900`\n\n"
+                "Or: `!alert add <card_id> change_percent <pct>`\n"
+                "Example: `!alert add sv8-161 change_percent 10`"
+            )
             return
         
         card_id = parts[0]
@@ -144,8 +187,8 @@ async def alert_cmd(ctx: commands.Context, action: str = "list", *, args: str = 
             await ctx.send("Price must be a number. Example: `!alert add sv8-161 above 900`")
             return
         
-        if condition not in ["above", "below"]:
-            await ctx.send("Condition must be 'above' or 'below'")
+        if condition not in ["above", "below", "change_percent"]:
+            await ctx.send("Condition must be 'above', 'below', or 'change_percent'")
             return
         
         try:
@@ -165,7 +208,7 @@ async def alert_cmd(ctx: commands.Context, action: str = "list", *, args: str = 
             await ctx.send("Usage: `!alert delete <alert_id>`")
     
     elif action == "check":
-        triggered = check_alerts(user_id)
+        triggered = check_alerts(user_id, use_live=ALERTS_USE_LIVE_PRICE)
         if triggered:
             response = "**🔔 Triggered Alerts:**\n\n"
             for t in triggered:
@@ -212,5 +255,4 @@ async def main() -> None:
 
 
 if __name__ == "__main__":
-    import asyncio
     asyncio.run(main())

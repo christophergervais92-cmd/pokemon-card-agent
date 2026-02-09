@@ -177,6 +177,38 @@ class TestAlerts:
         triggered = check_alerts("user123")
         assert len(triggered) == 0
 
+    def test_alerts_do_not_spam_without_crossing(self, temp_db, sample_cards):
+        """Ensure alerts trigger once and then only on threshold crossing."""
+        # Card test-1 has market price of 150
+        create_alert("user123", "test-1", "above", 100.0)  # Should trigger once
+
+        first = check_alerts("user123")
+        assert len(first) == 1
+
+        second = check_alerts("user123")
+        assert len(second) == 0
+
+    def test_change_percent_alert(self, temp_db, sample_cards):
+        """Test percent-change alert using last_seen_price baseline."""
+        # Card test-1 starts at 150
+        create_alert("user123", "test-1", "change_percent", 10.0)
+
+        # First check sets baseline; should not trigger.
+        first = check_alerts("user123")
+        assert len(first) == 0
+
+        # Increase price by 20%
+        conn = sqlite3.connect(temp_db)
+        try:
+            conn.execute("UPDATE cards SET tcgplayer_market = ? WHERE id = ?", (180.0, "test-1"))
+            conn.commit()
+        finally:
+            conn.close()
+
+        second = check_alerts("user123")
+        assert len(second) == 1
+        assert second[0]["card_id"] == "test-1"
+
 
 # ===== Collection Tests =====
 

@@ -65,7 +65,7 @@ CONDITION_KEYWORDS = {
     "edge wear": -2,
     "corner wear": -2,
     "surface wear": -2,
-    " whitening": -1,
+    "whitening": -1,
     "foxing": -2,
     "mold": -5,
     "mildew": -4,
@@ -249,7 +249,13 @@ def assess_condition(notes: str) -> dict:
     # Generate recommendation
     major_defects = [f for f in analysis["factors"] if "major" in f]
     if major_defects:
-        recommendation = f"Card has major defects. Professional grading may not be worthwhile. Estimated value impact: -{len(major_defects) * 20-40}%"
+        # Rough heuristic: each major defect tends to reduce value materially.
+        impact_low = 20 * len(major_defects)
+        impact_high = 40 * len(major_defects)
+        recommendation = (
+            "Card has major defects. Professional grading may not be worthwhile. "
+            f"Estimated value impact: -{impact_low}% to -{impact_high}%"
+        )
     elif score >= 9:
         recommendation = "Excellent condition! Consider professional grading for valuable cards."
     elif score >= 7:
