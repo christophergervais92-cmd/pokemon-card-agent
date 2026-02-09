@@ -215,7 +215,6 @@ def check_alerts_with_options(user_id: Optional[str] = None, use_live: bool = Fa
                 else:
                     should_trigger = (last_seen_price <= threshold) and (current_price > threshold)
                 if should_trigger:
-                    should_trigger = True
                     message = f"📈 {card_id} is now ${current_price:.2f} (above ${threshold:.2f})"
             elif condition == "below":
                 if last_seen_price is None:
@@ -223,7 +222,6 @@ def check_alerts_with_options(user_id: Optional[str] = None, use_live: bool = Fa
                 else:
                     should_trigger = (last_seen_price >= threshold) and (current_price < threshold)
                 if should_trigger:
-                    should_trigger = True
                     message = f"📉 {card_id} is now ${current_price:.2f} (below ${threshold:.2f})"
             elif condition == "change_percent":
                 if last_seen_price is not None and float(last_seen_price) != 0:
