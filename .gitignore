@@ -1,0 +1,13 @@
+# Env and secrets
+.env
+.env.local
+
+# SQLite DB (populated by scripts/seed_db.py)
+pokemon_tcg.db
+*.db-journal
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
