@@ -32,6 +32,7 @@ from alerts.tracker import (
     get_alert_stats,
 )
 from grading.estimator import estimate_grade, assess_condition, get_grading_cost_estimate
+from agent.settings import get_settings, update_settings, can_auto_purchase, get_remaining_budget
 
 
 def create_app() -> Flask:
@@ -295,8 +296,87 @@ def create_app() -> Flask:
         result = get_grading_cost_estimate(float(card_value), float(estimated_grade))
         return jsonify(result)
     
+    # ===== Agent Settings Endpoints =====
+
+    @app.route("/api/agent/settings", methods=["GET"])
+    def get_agent_settings():
+        """GET /api/agent/settings - Get current agent autonomy settings."""
+        settings = get_settings()
+        if not settings:
+            return jsonify({"error": "Settings not initialized"}), 500
+        return jsonify(settings)
+
+    @app.route("/api/agent/settings", methods=["POST"])
+    def update_agent_settings():
+        """POST /api/agent/settings - Update agent autonomy settings.
+        Body: {
+            autonomy_level: 0-3,
+            daily_budget: 500,
+            per_card_max: 200,
+            deal_threshold_percent: 15,
+            psa10_only: true,
+            raw_allowed: false,
+            modern_only: true,
+            ebay_allowed: true,
+            tcgplayer_allowed: true,
+            facebook_allowed: false,
+            notification_discord: true,
+            notification_telegram: false
+        }
+        """
+        data = request.get_json() or {}
+
+        # Validate autonomy_level if provided
+        if "autonomy_level" in data:
+            level = data["autonomy_level"]
+            if not isinstance(level, int) or level < 0 or level > 3:
+                return jsonify({"error": "autonomy_level must be 0-3"}), 400
+
+        success = update_settings(data)
+        if success:
+            return jsonify({"success": True, "settings": get_settings()})
+        return jsonify({"error": "Failed to update settings"}), 500
+
+    @app.route("/api/agent/can-purchase", methods=["POST"])
+    def check_can_purchase():
+        """POST /api/agent/can-purchase - Check if a specific purchase would be auto-executed.
+        Body: {price: 120.0, market_price: 150.0}
+        """
+        data = request.get_json() or {}
+        price = data.get("price")
+        market_price = data.get("market_price")
+
+        if price is None or market_price is None:
+            return jsonify({"error": "price and market_price are required"}), 400
+
+        settings = get_settings()
+        can_auto = can_auto_purchase(float(price), float(market_price))
+        remaining = get_remaining_budget()
+
+        return jsonify({
+            "can_auto_purchase": can_auto,
+            "price": price,
+            "market_price": market_price,
+            "remaining_budget": remaining,
+            "settings": settings
+        })
+
+    @app.route("/api/agent/budget", methods=["GET"])
+    def get_budget_status():
+        """GET /api/agent/budget - Get daily budget status."""
+        settings = get_settings()
+        remaining = get_remaining_budget()
+        spent = settings["daily_budget"] - remaining if settings else 0
+
+        return jsonify({
+            "daily_budget": settings["daily_budget"] if settings else 0,
+            "spent_today": spent,
+            "remaining": remaining,
+            "autonomy_level": settings["autonomy_level"] if settings else 0
+        })
+
     # ===== Stats Endpoints =====
-    
+
     @app.route("/api/stats", methods=["GET"])
     def get_stats():
         """GET /api/stats - Get overall system statistics."""

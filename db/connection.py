@@ -8,6 +8,28 @@ from pathlib import Path
 DB_PATH = Path(__file__).resolve().parent.parent / "pokemon_tcg.db"
 
 SCHEMA = """
+-- Agent settings for autonomous purchasing rules
+CREATE TABLE IF NOT EXISTS agent_settings (
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    autonomy_level INTEGER NOT NULL DEFAULT 0,
+    daily_budget REAL DEFAULT 0,
+    per_card_max REAL DEFAULT 0,
+    deal_threshold_percent REAL DEFAULT 15,
+    psa10_only INTEGER DEFAULT 1,
+    raw_allowed INTEGER DEFAULT 0,
+    modern_only INTEGER DEFAULT 1,
+    ebay_allowed INTEGER DEFAULT 1,
+    tcgplayer_allowed INTEGER DEFAULT 1,
+    facebook_allowed INTEGER DEFAULT 0,
+    notification_discord INTEGER DEFAULT 1,
+    notification_telegram INTEGER DEFAULT 0,
+    updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Insert default settings if not exists
+INSERT OR IGNORE INTO agent_settings (id, autonomy_level, daily_budget, per_card_max, deal_threshold_percent)
+VALUES (1, 0, 500, 200, 15);
+
 -- Sets from Pokémon TCG API (id, name, series, releaseDate, images.logo, total, value_index)
 CREATE TABLE IF NOT EXISTS sets (
     id TEXT PRIMARY KEY,
